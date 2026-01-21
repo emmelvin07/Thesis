@@ -1,0 +1,13 @@
+=== TEST SUMMARY ===
+
+Confusion Matrix:
+[[32 43]
+ [37 38]]
+
+Total Videos Evaluated: 150
+Correct Predictions   : 70
+Accuracy  : 46.67%
+Precision : 46.91%
+Recall    : 50.67%
+F1-Score  : 48.72%
+ROC-AUC   : 48.14%
