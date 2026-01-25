@@ -4,7 +4,7 @@ import numpy as np
 class ABCAlgorithm:
     """
     Stable Artificial Bee Colony (ABC) optimizer
-    optimized for expensive objective functions (CNN training).
+    for expensive objective functions (CNN training).
     """
 
     def __init__(self, num_bees=12, limit=6, max_iter=6, bounds=None, rng_seed=None):
@@ -15,28 +15,17 @@ class ABCAlgorithm:
         self.dim = len(bounds)
         self.rng = np.random.default_rng(rng_seed)
 
-    # ------------------------------------------------------------
-    # Generate random solution within bounds
-    # ------------------------------------------------------------
     def random_solution(self):
         low = self.bounds[:, 0]
         high = self.bounds[:, 1]
         return self.rng.uniform(low, high)
 
-    # ------------------------------------------------------------
-    # Keep solution inside bounds
-    # ------------------------------------------------------------
     def apply_bounds(self, solution):
         low = self.bounds[:, 0]
         high = self.bounds[:, 1]
         return np.clip(solution, low, high)
 
-    # ------------------------------------------------------------
-    # Main ABC optimization loop
-    # ------------------------------------------------------------
     def optimize(self, objective_fn, patience=3):
-
-        # Initialize food sources
         foods = np.array([self.random_solution() for _ in range(self.num_bees)])
         fitness = np.array([objective_fn(sol) for sol in foods])
         trials = np.zeros(self.num_bees)
@@ -50,9 +39,7 @@ class ABCAlgorithm:
 
         for cycle in range(1, self.max_iter + 1):
 
-            # ==================================================
-            # Employed Bee Phase
-            # ==================================================
+            # ---------------- EMPLOYED BEES ----------------
             for i in range(self.num_bees):
                 k = self.rng.integers(self.num_bees)
                 while k == i:
@@ -71,9 +58,7 @@ class ABCAlgorithm:
                 else:
                     trials[i] += 1
 
-            # ==================================================
-            # Onlooker Bee Phase (softmax selection)
-            # ==================================================
+            # ---------------- ONLOOKER BEES ----------------
             scores = np.exp(-fitness)
             probs = scores / (scores.sum() + 1e-12)
 
@@ -97,18 +82,14 @@ class ABCAlgorithm:
                 else:
                     trials[i] += 1
 
-            # ==================================================
-            # Scout Bee Phase
-            # ==================================================
+            # ---------------- SCOUT BEES ----------------
             for i in range(self.num_bees):
                 if trials[i] >= self.limit:
                     foods[i] = self.random_solution()
                     fitness[i] = objective_fn(foods[i])
                     trials[i] = 0
 
-            # ==================================================
-            # Track best + early stopping
-            # ==================================================
+            # ---------------- BEST TRACKING ----------------
             idx = np.argmin(fitness)
             if fitness[idx] < best_score:
                 best_score = fitness[idx]
@@ -120,7 +101,7 @@ class ABCAlgorithm:
             print(f"[ABC] Cycle {cycle}/{self.max_iter} best_score={best_score:.6f}")
 
             if no_improve >= patience:
-                print(f"[ABC] Early stopping triggered after {patience} cycles.")
+                print("[ABC] Early stopping triggered.")
                 break
 
         print(f"[ABC] Finished. Best score = {best_score:.6f}")

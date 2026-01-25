@@ -2,21 +2,20 @@
 import os
 import cv2
 import tensorflow as tf
-from tensorflow.keras import backend as K
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score,
-    f1_score, roc_auc_score, confusion_matrix,
-    roc_curve, auc
-)
-from training.abc_algorithm import ABCAlgorithm
-from training.cnn_model import create_cnn_model
 import numpy as np
 import shutil
 import time
 import csv
-from datetime import datetime
 import matplotlib.pyplot as plt
-import seaborn as sns
+
+from datetime import datetime
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score,
+    f1_score, roc_auc_score, confusion_matrix
+)
+
+from training.abc_algorithm import ABCAlgorithm
+from training.cnn_model import create_cnn_model
 
 # --------------------------------------------------
 # Paths
@@ -25,70 +24,56 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(BASE_DIR, "datasets")
 FRAME_DIR = os.path.join(BASE_DIR, "frames")
 MODEL_DIR = os.path.join(os.path.dirname(BASE_DIR), "models")
+PLOT_DIR = os.path.join(os.path.dirname(BASE_DIR), "plots")
 LOG_FILE = os.path.join(MODEL_DIR, "training_log.csv")
+
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 32
 
 # --------------------------------------------------
 # Extract frames
 # --------------------------------------------------
-def extract_frames(
-    dataset_dir=DATASET_DIR,
-    frame_dir=FRAME_DIR,
-    img_size=(224, 224),
-    max_frames_per_video=20
-):
-    start = time.time()
-
-    if os.path.exists(frame_dir):
-        shutil.rmtree(frame_dir)
-    os.makedirs(frame_dir, exist_ok=True)
+def extract_frames(max_frames_per_video=20):
+    if os.path.exists(FRAME_DIR):
+        shutil.rmtree(FRAME_DIR)
+    os.makedirs(FRAME_DIR, exist_ok=True)
 
     for cls in ["real", "fake"]:
-        src = os.path.join(dataset_dir, cls)
-        dst = os.path.join(frame_dir, cls)
+        src = os.path.join(DATASET_DIR, cls)
+        dst = os.path.join(FRAME_DIR, cls)
         os.makedirs(dst, exist_ok=True)
 
-        if not os.path.exists(src):
-            continue
+        for file in os.listdir(src):
+            path = os.path.join(src, file)
+            name = os.path.splitext(file)[0]
 
-        for filename in os.listdir(src):
-            file_path = os.path.join(src, filename)
-            name = os.path.splitext(filename)[0]
-
-            if filename.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
-                cap = cv2.VideoCapture(file_path)
+            if file.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
+                cap = cv2.VideoCapture(path)
                 count = 0
                 while count < max_frames_per_video:
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    frame = cv2.resize(frame, img_size)
-                    cv2.imwrite(
-                        os.path.join(dst, f"{name}_{cls}_{count:04d}.jpg"),
-                        frame
-                    )
+                    frame = cv2.resize(frame, IMG_SIZE)
+                    cv2.imwrite(os.path.join(dst, f"{name}_{count:04d}.jpg"), frame)
                     count += 1
                 cap.release()
-
-            elif filename.lower().endswith((".jpg", ".jpeg", ".png")):
-                shutil.copy(file_path, dst)
-
-    print(f"[DATA] Frame extraction completed in {time.time() - start:.1f}s")
 
 # --------------------------------------------------
 # Load dataset
 # --------------------------------------------------
-def load_dataset(img_size=(224, 224), batch_size=32):
+def load_dataset():
     extract_frames()
 
     datagen = tf.keras.preprocessing.image.ImageDataGenerator(
-        rescale=1.0 / 255.0,
+        rescale=1./255,
         validation_split=0.2
     )
 
     train_gen = datagen.flow_from_directory(
         FRAME_DIR,
-        target_size=img_size,
-        batch_size=batch_size,
+        target_size=IMG_SIZE,
+        batch_size=BATCH_SIZE,
         class_mode="binary",
         subset="training",
         shuffle=True
@@ -96,8 +81,8 @@ def load_dataset(img_size=(224, 224), batch_size=32):
 
     val_gen = datagen.flow_from_directory(
         FRAME_DIR,
-        target_size=img_size,
-        batch_size=batch_size,
+        target_size=IMG_SIZE,
+        batch_size=BATCH_SIZE,
         class_mode="binary",
         subset="validation",
         shuffle=False
@@ -106,95 +91,92 @@ def load_dataset(img_size=(224, 224), batch_size=32):
     return train_gen, val_gen
 
 # --------------------------------------------------
+# Plot Metrics (NEW)
+# --------------------------------------------------
+def plot_metrics(history):
+    os.makedirs(PLOT_DIR, exist_ok=True)
+
+    epochs = range(1, len(history.history["loss"]) + 1)
+
+    precision = np.array(history.history["precision"])
+    recall = np.array(history.history["recall"])
+    val_precision = np.array(history.history["val_precision"])
+    val_recall = np.array(history.history["val_recall"])
+
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-7)
+    val_f1 = 2 * (val_precision * val_recall) / (val_precision + val_recall + 1e-7)
+
+    plots = {
+        "accuracy": ("accuracy", "val_accuracy", "Accuracy"),
+        "loss": ("loss", "val_loss", "Loss"),
+        "precision": ("precision", "val_precision", "Precision"),
+        "recall": ("recall", "val_recall", "Recall"),
+        "auc": ("auc", "val_auc", "AUC")
+    }
+
+    for name, (train_key, val_key, title) in plots.items():
+        plt.figure()
+        plt.plot(epochs, history.history[train_key], label=f"Train {title}")
+        plt.plot(epochs, history.history[val_key], label=f"Val {title}")
+        plt.xlabel("Epochs")
+        plt.ylabel(title)
+        plt.title(f"{title} vs Epochs")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(PLOT_DIR, f"{name}.png"))
+        plt.show()
+
+    plt.figure()
+    plt.plot(epochs, f1, label="Train F1-score")
+    plt.plot(epochs, val_f1, label="Val F1-score")
+    plt.xlabel("Epochs")
+    plt.ylabel("F1-score")
+    plt.title("F1-score vs Epochs")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(PLOT_DIR, "f1_score.png"))
+    plt.show()
+
+# --------------------------------------------------
 # ABC Objective
 # --------------------------------------------------
 def build_objective(train_gen, val_gen):
     def objective(params):
-        lr = 10 ** params[0]
-        dense_units = int(params[1])
+        log_lr, dense = params
+        lr = 10 ** log_lr
+        dense = int(dense)
 
         try:
+            tf.keras.backend.clear_session()
+
             model = create_cnn_model(
                 learning_rate=lr,
-                dense_units=dense_units,
+                dense_units=dense,
                 dropout_rate=0.3
             )
-            h = model.fit(train_gen, validation_data=val_gen, epochs=1, verbose=0)
-            loss = float(h.history["val_loss"][-1])
-            K.clear_session()
-            return loss
-        except:
-            K.clear_session()
-            return float("inf")
+
+            history = model.fit(
+                train_gen,
+                validation_data=val_gen,
+                epochs=1,
+                steps_per_epoch=min(10, len(train_gen)),
+                validation_steps=min(5, len(val_gen)),
+                verbose=0
+            )
+
+            loss = history.history["val_loss"][-1]
+            return float(loss) if np.isfinite(loss) else 1e6
+
+        except Exception as e:
+            print("[OBJ ERROR]", e)
+            return 1e6
+
     return objective
 
 # --------------------------------------------------
-# Plotting
-# --------------------------------------------------
-def plot_all(history, y_true, y_pred, y_prob, num_real, num_fake):
-    tag = f"{num_real}_{num_fake}"
-    plot_dir = os.path.join(MODEL_DIR, f"plots_{tag}")
-    os.makedirs(plot_dir, exist_ok=True)
-
-    # Accuracy
-    plt.figure()
-    plt.plot(history.history["accuracy"], label="Train")
-    plt.plot(history.history["val_accuracy"], label="Val")
-    plt.legend()
-    plt.title("Accuracy")
-    plt.savefig(os.path.join(plot_dir, f"accuracy_{tag}.png"))
-    plt.close()
-
-    # Loss
-    plt.figure()
-    plt.plot(history.history["loss"], label="Train")
-    plt.plot(history.history["val_loss"], label="Val")
-    plt.legend()
-    plt.title("Loss")
-    plt.savefig(os.path.join(plot_dir, f"loss_{tag}.png"))
-    plt.close()
-
-    # ROC-AUC
-    fpr, tpr, _ = roc_curve(y_true, y_prob)
-    roc_auc = auc(fpr, tpr)
-    plt.figure()
-    plt.plot(fpr, tpr, label=f"AUC={roc_auc:.3f}")
-    plt.plot([0, 1], [0, 1], "--")
-    plt.legend()
-    plt.title("ROC Curve")
-    plt.savefig(os.path.join(plot_dir, f"roc_auc_{tag}.png"))
-    plt.close()
-
-    # Confusion Matrix
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(4, 4))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-    plt.xlabel("Predicted")
-    plt.ylabel("Actual")
-    plt.title("Confusion Matrix")
-    plt.savefig(os.path.join(plot_dir, f"confusion_matrix_{tag}.png"))
-    plt.close()
-
-    # Precision / Recall / F1
-    p = precision_score(y_true, y_pred, zero_division=0)
-    r = recall_score(y_true, y_pred, zero_division=0)
-    f1 = f1_score(y_true, y_pred, zero_division=0)
-
-    plt.figure()
-    plt.bar(["Precision", "Recall", "F1"], [p, r, f1])
-    plt.ylim(0, 1)
-    plt.title("Metrics")
-    plt.savefig(os.path.join(plot_dir, f"metrics_{tag}.png"))
-    plt.close()
-
-    return roc_auc, p, r, f1, cm
-
-# --------------------------------------------------
-# Save CSV log
+# Save CSV Log
 # --------------------------------------------------
 def save_log(row):
-    os.makedirs(MODEL_DIR, exist_ok=True)
-
     header = [
         "timestamp", "num_real", "num_fake",
         "learning_rate", "dense_units",
@@ -205,6 +187,7 @@ def save_log(row):
     ]
 
     write_header = not os.path.exists(LOG_FILE)
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
     with open(LOG_FILE, "a", newline="") as f:
         writer = csv.writer(f)
@@ -216,7 +199,7 @@ def save_log(row):
 # Main
 # --------------------------------------------------
 def main():
-    start_time = time.time()
+    start = time.time()
 
     train_gen, val_gen = load_dataset()
     num_real = len(os.listdir(os.path.join(DATASET_DIR, "real")))
@@ -231,6 +214,7 @@ def main():
     )
 
     best_params, best_loss = abc.optimize(build_objective(train_gen, val_gen))
+
     lr = 10 ** best_params[0]
     dense = int(best_params[1])
 
@@ -243,41 +227,40 @@ def main():
     history = model.fit(
         train_gen,
         validation_data=val_gen,
-        epochs=5,
+        epochs=10,
         callbacks=[tf.keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True)],
         verbose=1
     )
+
+    plot_metrics(history)
 
     val_gen.reset()
     y_true = val_gen.classes
     y_prob = model.predict(val_gen).ravel()
     y_pred = (y_prob > 0.5).astype(int)
 
-    val_accuracy = accuracy_score(y_true, y_pred)
-    roc_auc, p, r, f1, cm = plot_all(
-        history, y_true, y_pred, y_prob, num_real, num_fake
-    )
+    acc = accuracy_score(y_true, y_pred)
+    p = precision_score(y_true, y_pred, zero_division=0)
+    r = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+    roc = roc_auc_score(y_true, y_prob)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
 
-    tn, fp, fn, tp = cm.ravel()
-    training_time = time.time() - start_time
-
-    model_path = os.path.join(
-        MODEL_DIR, f"abc_cnn_model_{num_real}_{num_fake}.h5"
-    )
+    model_path = os.path.join(MODEL_DIR, f"abc_cnn_model_{num_real}_{num_fake}.h5")
     model.save(model_path)
 
     save_log([
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         num_real, num_fake,
         lr, dense,
-        best_loss, val_accuracy,
-        p, r, f1,
-        roc_auc,
+        best_loss, acc,
+        p, r, f1, roc,
         tn, fp, fn, tp,
-        round(training_time, 2)
+        round(time.time() - start, 2)
     ])
 
-    print(f"[SYSTEM] Training complete. Model saved to {model_path}")
+    print(f"\n[SYSTEM] Training complete. Model saved to {model_path}")
 
+# --------------------------------------------------
 if __name__ == "__main__":
     main()
