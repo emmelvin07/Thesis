@@ -22,30 +22,15 @@ BASE_DIR = os.path.dirname(__file__)
 MODEL_DIR = os.path.join(os.path.dirname(BASE_DIR), "models")
 INPUT_DIR = os.path.join(BASE_DIR, "detector_input")
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
-IMG_SIZE = (128, 128)
+IMG_SIZE = (224, 224)  # Match latest CNN model input
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
-
-# ------------------------------------------------------
-# Console table helper
-# ------------------------------------------------------
-def print_table(rows):
-    headers = ["TestCase", "Video", "Expected", "Actual", "Result"]
-    widths = [10, 30, 10, 10, 10]
-
-    def fmt(row):
-        return " | ".join(str(col).ljust(w) for col, w in zip(row, widths))
-
-    print(fmt(headers))
-    print("-" * sum(widths))
-    for r in rows:
-        print(fmt(r))
 
 # ------------------------------------------------------
 # Model selection
 # ------------------------------------------------------
 def list_models():
-    return sorted(glob.glob(os.path.join(MODEL_DIR, "abc_cnn_model*.h5")))
+    return sorted(glob.glob(os.path.join(MODEL_DIR, "abc_cnn_model_*.h5")))
 
 def select_model():
     models = list_models()
@@ -67,7 +52,7 @@ def select_model():
         return max(models, key=os.path.getmtime)
 
 MODEL_PATH = select_model()
-print(f"\n[SYSTEM] Loading model: {MODEL_PATH}")
+print(f"[SYSTEM] Loading model: {MODEL_PATH}")
 model = tf.keras.models.load_model(MODEL_PATH)
 print("[SYSTEM] Model loaded successfully!\n")
 
@@ -98,8 +83,13 @@ def predict_video(video_path, sample_frames=20):
 
     cap.release()
 
-    avg_score = float(np.mean(preds))
-    label = "FAKE" if avg_score >= 0.5 else "REAL"
+    if preds:
+        avg_score = float(np.mean(preds))
+        label = "FAKE" if avg_score >= 0.5 else "REAL"
+    else:
+        avg_score = 0.0
+        label = "UNKNOWN"
+
     return label, avg_score
 
 # ------------------------------------------------------
@@ -109,14 +99,12 @@ if __name__ == "__main__":
     print("=== TESTING PHASE ===\n")
 
     results = []
-    table_rows = []
-
     y_true = []
     y_pred = []
     y_scores = []
 
     # --------------------------------------------------
-    # Collect videos
+    # Gather all videos with their true labels
     # --------------------------------------------------
     all_videos = []
     for true_label in ["real", "fake"]:
@@ -125,85 +113,73 @@ if __name__ == "__main__":
             continue
         for file in os.listdir(folder):
             if file.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
-                all_videos.append((os.path.join(folder, file), true_label))
+                video_path = os.path.join(folder, file)
+                all_videos.append((video_path, true_label))
 
-    random.shuffle(all_videos)
+    if not all_videos:
+        print("[WARNING] No videos found in detector_input/real or detector_input/fake.")
+    else:
+        # Shuffle entire dataset (real + fake)
+        random.shuffle(all_videos)
 
-    # --------------------------------------------------
-    # Run predictions
-    # --------------------------------------------------
-    for idx, (video_path, true_label) in enumerate(all_videos, start=1):
-        pred_label, score = predict_video(video_path)
+        # --------------------------------------------------
+        # Run predictions
+        # --------------------------------------------------
+        for video_path, true_label in all_videos:
+            pred_label, score = predict_video(video_path)
 
-        expected = true_label.upper()
-        actual = pred_label
-        result = "PASSED" if expected == actual else "FAILED"
-        test_case = f"TC{idx:02d}"
+            true = 1 if true_label == "fake" else 0
+            pred = 1 if pred_label == "FAKE" else 0
 
-        true = 1 if expected == "FAKE" else 0
-        pred = 1 if actual == "FAKE" else 0
+            y_true.append(true)
+            y_pred.append(pred)
+            y_scores.append(score)
 
-        y_true.append(true)
-        y_pred.append(pred)
-        y_scores.append(score)
+            correct = "YES" if true == pred else "NO"
 
-        results.append([
-            test_case,
-            os.path.basename(video_path),
-            expected,
-            actual,
-            result,
-            round(score, 4)
-        ])
+            results.append([
+                os.path.basename(video_path),
+                true_label.upper(),
+                pred_label,
+                round(score, 4),
+                correct
+            ])
 
-        table_rows.append([
-            test_case,
-            os.path.basename(video_path),
-            expected,
-            actual,
-            result
-        ])
-
-        print(
-            f"{test_case} | {os.path.basename(video_path)} | "
-            f"Expected: {expected} | Actual: {actual} | "
-            f"Result: {result} | Score: {score:.4f}"
-        )
-
-    # --------------------------------------------------
-    # Print table
-    # --------------------------------------------------
-    print("\n=== PER-VIDEO TEST RESULTS ===\n")
-    print_table(table_rows)
+            # ---------------- VERBOSE TEST CASE OUTPUT ----------------
+            print(f"Test Case   : {os.path.basename(video_path)}")
+            print(f"Expected    : {true_label.upper()}")
+            print(f"Actual      : {pred_label}")
+            print(f"Score       : {score:.4f}")
+            print(f"Correct     : {correct}\n")
 
     # --------------------------------------------------
     # Metrics
     # --------------------------------------------------
-    cm = confusion_matrix(y_true, y_pred)
-    acc = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    recall = recall_score(y_true, y_pred, zero_division=0)
-    f1 = f1_score(y_true, y_pred, zero_division=0)
-    roc_auc = roc_auc_score(y_true, y_scores)
+    total_videos = len(y_true)
+    correct_predictions = sum([1 if t == p else 0 for t, p in zip(y_true, y_pred)])
+
+    if total_videos > 0:
+        cm = confusion_matrix(y_true, y_pred)
+        acc = accuracy_score(y_true, y_pred)
+        precision = precision_score(y_true, y_pred, zero_division=0)
+        recall = recall_score(y_true, y_pred, zero_division=0)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+        roc_auc = roc_auc_score(y_true, y_scores)
+    else:
+        cm = np.array([[]])
+        acc = precision = recall = f1 = roc_auc = 0.0
 
     # --------------------------------------------------
-    # Save CSV
+    # Save CSV Results
     # --------------------------------------------------
     csv_path = os.path.join(RESULTS_DIR, "test_results.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "TestCase",
-            "Video",
-            "Expected Output",
-            "Actual Output",
-            "Result",
-            "Score"
-        ])
+        writer.writerow(["Video", "True Label", "Predicted Label", "Score", "Correct"])
         writer.writerows(results)
 
     # --------------------------------------------------
-    # Save metrics
+    # Save Metrics
     # --------------------------------------------------
     metrics_path = os.path.join(RESULTS_DIR, "evaluation_metrics.txt")
     with open(metrics_path, "w") as f:
@@ -211,6 +187,8 @@ if __name__ == "__main__":
         f.write("Confusion Matrix:\n")
         f.write(str(cm))
         f.write("\n\n")
+        f.write(f"Total Videos Evaluated: {total_videos}\n")
+        f.write(f"Correct Predictions   : {correct_predictions}\n")
         f.write(f"Accuracy  : {acc * 100:.2f}%\n")
         f.write(f"Precision : {precision * 100:.2f}%\n")
         f.write(f"Recall    : {recall * 100:.2f}%\n")
@@ -218,11 +196,13 @@ if __name__ == "__main__":
         f.write(f"ROC-AUC   : {roc_auc * 100:.2f}%\n")
 
     # --------------------------------------------------
-    # Final console summary
+    # Console Output
     # --------------------------------------------------
     print("\n=== TEST SUMMARY ===")
     print("Confusion Matrix:")
     print(cm)
+    print(f"Total Videos Evaluated: {total_videos}")
+    print(f"Correct Predictions   : {correct_predictions}")
     print(f"Accuracy  : {acc * 100:.2f}%")
     print(f"Precision : {precision * 100:.2f}%")
     print(f"Recall    : {recall * 100:.2f}%")
